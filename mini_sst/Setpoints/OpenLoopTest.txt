@@ -1,0 +1,515 @@
+//###########################################################################
+// FILE:   mini_sst.c
+// TITLE:  Control code for spilt AC output inverter
+// Author: M A Awal
+//
+//###########################################################################
+//
+// Hardware Description
+//
+// PWM:
+// PWM2, PWM6 and PWM10 for PWM
+//
+// ADC:
+// A2, A5
+// B2, B4
+//
+// Relay:
+// P61, P41
+// P65, P69
+//
+// OverTemp:
+// P72
+//
+// RST:
+// P4
+//
+// RDY:
+// P78
+//
+// DESAT:
+// P73
+//
+//###########################################################################
+// $TI Release: F2837xS Support Library v160 $
+// $Release Date: Mon Jun 15 14:14:46 CDT 2015 $
+// $Copyright: Copyright (C) 2014-2015 Texas Instruments Incorporated -
+//             http://www.ti.com/ ALL RIGHTS RESERVED $
+//###########################################################################
+
+#include "Mini_SST.h"
+#include "Solar_F.h"
+#pragma CODE_SECTION(epwm1_isr, "ramfuncs");// Copy the code from flash to RAM
+
+// Prototype statements for functions found within this file.
+
+// PLL Parameters
+#define	PI		3.14159265359
+#define GRID_FREQ		60
+#define	ISR_FREQUENCY	75000	//=1/T_PWM
+
+// Notch Filter Parameters
+#define c1	0.1
+#define c2	0.00001
+
+#define W		0.005026548245744
+//#define VDC		50
+// First order LPF
+/*#define FLPF_b0 0.295218277550778
+#define FLPF_b1 0.295218277550778
+#define FLPF_a1 -0.409563444898444 //BW=15kHz
+*/
+#define FLPF_b0 0.094793050123664
+#define FLPF_b1 0.094793050123664
+#define FLPF_a1 -0.810413899752672
+
+// Sensor and ADC gains
+#define	V1_b0	-510.9599073624481
+#define	V1_b1	0.3125088986410
+
+#define	V2_b0	-516.5982623771416
+#define	V2_b1	0.3575687731730
+
+#define	V3_b0	-508.3701660091357
+#define	V3_b1	0.3122801941164
+
+#define	V4_b0	-503.0871215391882
+#define	V4_b1	0.3265597423460
+
+#define	I1_b0	66.406490493061895
+#define	I1_b1	-0.027975957251376
+
+#define	I2_b0	65.462869378587641
+#define	I2_b1	-0.029012336094684
+
+// AC current control PR gains
+#define PR_b0	3.350484927405215
+#define PR_b1	-6.597263191929562
+#define PR_b2	3.246857681397085
+
+#define PR_a1	-1.999974733972327
+#define PR_a2	1
+
+void InitEPwm1(void);
+void InitEPwm2(void);
+void InitEPwm6(void);
+void InitEPwm7(void);
+void InitEPwm8(void);
+void InitEPwm9(void);
+void InitEPwm10(void);
+void InitEPwm11(void);
+
+__interrupt void epwm1_isr(void);
+void InitEPwmGpio_TZ(void);
+void ConfigureADC(void);
+void SetupADCSoftware(void);
+void InitPeripheralClks();
+void MemCopy(Uint16 *SourceAddr, Uint16* SourceEndAddr, Uint16* DestAddr);		// For Copying the code from flash to RAM
+
+void scic_init(void);
+void scic_fifo_init(void);
+void scic_xmit(int x);
+
+// Test Variables
+float32 wt=0;
+Uint32 i=0;
+float32 VDC=101;
+int32 control_c=0;
+int32 Relay1_c=0;
+int32 Relay2_c=0;
+int32 Relay3_c=0;
+int32 Relay4_c=0;
+float32 x_DB[1250];
+float32 Vg,Vc,Vdc,VDCLK,Iac,Idc;
+float32 m_ac;
+float32 Iac_pref=0;
+float32 Iac_pref_old=0;
+float32 Iac_ref=0;
+
+float32 V1s[2]={0,0};
+float32 V1f[2]={0,0};
+
+float32 V2s[2]={0,0};
+float32 V2f[2]={0,0};
+
+float32 V3s[2]={0,0};
+float32 V3f[2]={0,0};
+
+float32 V4s[2]={0,0};
+float32 V4f[2]={0,0};
+
+float32 I1s[2]={0,0};
+float32 I1f[2]={0,0};
+
+float32 I2s[2]={0,0};
+float32 I2f[2]={0,0};
+
+float32 Iac_err[3]={0,0,0};
+float32 Iac_PR[3]={0,0,0};
+int strt=0;
+int DB=1;
+int GrdSync=0;
+int GSynFlag=0;
+float32 m_a=0;
+float32 m_b=0;
+int x=0;
+
+
+SPLL_1ph_SOGI_F	SPLL_Vg;
+NOTCH_COEFF_F NF_f2;
+NOTCH_VARS_F VDCLK_f;
+
+void main(void)
+{
+// Step 1. Initialize System Control:
+// PLL, WatchDog, enable Peripheral Clocks
+// This example function is found in the F2837xS_SysCtrl.c file.
+    InitSysCtrl();
+    InitPeripheralClks();
+
+// Step 2. Initialize GPIO:
+// This example function is found in the F2837xS_Gpio.c file and
+// illustrates how to set the GPIO to it's default state.
+    InitGpio();
+
+// For this case just init GPIO pins for ePWM1, ePWM2, ePWM3
+// These functions are in the F2837xS_EPwm.c file
+    InitEPwmGpio_TZ();
+
+// Step 3. Clear all interrupts and initialize PIE vector table:
+// Disable CPU interrupts
+    DINT;
+
+// Initialize the PIE control registers to their default state.
+// The default state is all PIE interrupts disabled and flags
+// are cleared.
+// This function is found in the F2837xS_PieCtrl.c file.
+    InitPieCtrl();
+
+// Disable CPU interrupts and clear all CPU interrupt flags:
+    IER = 0x0000;
+    IFR = 0x0000;
+
+// Initialize the PIE vector table with pointers to the shell Interrupt
+// Service Routines (ISR).
+// This will populate the entire table, even if the interrupt
+// is not used in this example.  This is useful for debug purposes.
+// The shell ISR routines are found in F2837xS_DefaultIsr.c.
+// This function is found in F2837xS_PieVect.c.
+    InitPieVectTable();
+
+// Interrupts that are used in this example are re-mapped to
+// ISR functions found within this file.
+	EALLOW; // This is needed to write to EALLOW protected registers
+	PieVectTable.EPWM1_INT = &epwm1_isr;
+	EDIS;   // This is needed to disable write to EALLOW protected registers
+
+// Memory Copy.
+	MemCopy(&RamfuncsLoadStart, &RamfuncsLoadEnd, &RamfuncsRunStart);
+
+// Configure Comparator COMP1H to accept POS input from pin and NEG input from DAC
+	//InitCMPSS();
+
+// Step 4. Initialize the Device Peripherals:
+
+	EALLOW;
+	CpuSysRegs.PCLKCR0.bit.TBCLKSYNC =0;
+	ClkCfgRegs.PERCLKDIVSEL.bit.EPWMCLKDIV = 0;		// SYSCLKOUT equals EPWMCLK
+	EDIS;
+
+
+	SPLL_1ph_SOGI_F_init(GRID_FREQ,((float)(1.0/ISR_FREQUENCY)),&SPLL_Vg);
+	SPLL_1ph_SOGI_F_coeff_update(((float)(1.0/ISR_FREQUENCY)),(float)(2*PI*GRID_FREQ),&SPLL_Vg);
+	NOTCH_FLTR_F_VARS_init(&VDCLK_f);
+	NOTCH_FLTR_F_COEFF_Update(((float)(1.0/ISR_FREQUENCY)), (float)(2*PI*GRID_FREQ*2),(float)c2,(float)c1, &NF_f2);
+
+	// SCI Code section
+	/*GPIO_SetupPinMux(89, GPIO_MUX_CPU1, 6);
+	GPIO_SetupPinOptions(89, GPIO_OUTPUT, GPIO_PUSHPULL);
+	scic_init();
+	scic_fifo_init();*/
+	// End-SCI Code Section
+
+	InitEPwm1();
+ 	InitEPwm2();
+ 	InitEPwm6();
+ 	//InitEPwm7();
+ 	//InitEPwm8();
+ 	//InitEPwm9();
+ 	InitEPwm10();
+ 	//InitEPwm11();
+
+	EALLOW;
+	CpuSysRegs.PCLKCR0.bit.TBCLKSYNC =1;
+	EDIS;
+
+// Step 5. User specific code, enable interrupts:
+//	EPwm1TZIntCount = 0;
+//	EPwm2TZIntCount = 0;
+
+//Configure the ADCs and power them up
+	ConfigureADC();
+
+//Setup the ADCs for software conversions
+	SetupADCSoftware();
+
+// Initialization
+	InitVariable();
+
+// Enable CPU INT2 which is connected to EPWM1-3 INT:
+	IER |= M_INT3;
+
+// Enable EPWM INTn in the PIE: Group 3 interrupt 1-3
+	PieCtrlRegs.PIEIER3.bit.INTx1 = 1;
+
+// Enable global Interrupts and higher priority real-time debug events:
+    EINT;  // Enable Global interrupt INTM
+    ERTM;  // Enable Global realtime interrupt DBGM
+
+// Step 6. IDLE loop. Just sit and loop forever (optional):
+    for(;;)
+    {
+        asm ("          NOP");
+    }
+}
+
+__interrupt void epwm1_isr(void)
+{
+	//start conversions immediately via software, ADCA nd ADCB
+	AdcaRegs.ADCSOCFRC1.all = 0x0003;   //SOC0, SOC1
+	AdcbRegs.ADCSOCFRC1.all = 0x000F;   //SOC0, SOC1, SOC2, SOC3
+	//wait for ADCA to complete, then acknowledge flag
+	while(AdcaRegs.ADCINTFLG.bit.ADCINT1 == 0 || AdcbRegs.ADCINTFLG.bit.ADCINT1 == 0);
+
+	/*		 Read ADC Result		*/
+	V1s[0]=AdcbResultRegs.ADCRESULT0;
+	V2s[0]=AdcbResultRegs.ADCRESULT1;
+	V3s[0]=AdcaResultRegs.ADCRESULT0;
+	V4s[0]=AdcaResultRegs.ADCRESULT1;
+	I1s[0]=AdcbResultRegs.ADCRESULT2;
+	I2s[0]=AdcbResultRegs.ADCRESULT3;
+	//End of ADC reading
+	if (control_c==1)
+	{
+		Gateoff();
+		control_c=0;
+	}
+
+	else if(control_c==2)
+	{
+		GateReset();
+		control_c=0;
+	}
+/*
+	if (Relay1_c==1)
+	{
+		GpioDataRegs.GPCSET.bit.GPIO65 = 1;
+	}
+	else
+	{
+		GpioDataRegs.GPCCLEAR.bit.GPIO65 = 1;
+	}
+
+	if (Relay2_c==1)
+	{
+		GpioDataRegs.GPCSET.bit.GPIO69 = 1;
+	}
+	else
+	{
+		GpioDataRegs.GPCCLEAR.bit.GPIO69 = 1;
+	}
+
+	if (Relay3_c==1)
+	{
+		GpioDataRegs.GPBSET.bit.GPIO61 = 1;
+	}
+	else
+	{
+		GpioDataRegs.GPBCLEAR.bit.GPIO61 = 1;
+	}
+
+	if (Relay4_c==1)
+	{
+		GpioDataRegs.GPBSET.bit.GPIO41 = 1;
+	}
+	else
+	{
+		GpioDataRegs.GPBCLEAR.bit.GPIO41 = 1;
+	}
+	*/
+
+/*      1st Order LPF with BW=15KHz     */
+	V1f[0]=FLPF_b0*V1s[0]+FLPF_b1*V1s[1]-FLPF_a1*V1f[1];
+	V1s[1]=V1s[0];
+	V1f[1]=V1f[0];
+
+	V2f[0]=FLPF_b0*V2s[0]+FLPF_b1*V2s[1]-FLPF_a1*V2f[1];
+	V2s[1]=V2s[0];
+	V2f[1]=V2f[0];
+
+	V3f[0]=FLPF_b0*V3s[0]+FLPF_b1*V3s[1]-FLPF_a1*V3f[1];
+	V3s[1]=V3s[0];
+	V3f[1]=V3f[0];
+
+	V4f[0]=FLPF_b0*V4s[0]+FLPF_b1*V4s[1]-FLPF_a1*V4f[1];
+	V4s[1]=V4s[0];
+	V4f[1]=V4f[0];
+
+	I1f[0]=FLPF_b0*I1s[0]+FLPF_b1*I1s[1]-FLPF_a1*I1f[1];
+	I1s[1]=I1s[0];
+	I1f[1]=I1f[0];
+
+	//I2s[0]=-I2_b0-I2_b1*I2s[0];
+
+	I2f[0]=FLPF_b0*I2s[0]+FLPF_b1*I2s[1]-FLPF_a1*I2f[1];
+	I2s[1]=I2s[0];
+	I2f[1]=I2f[0];
+// End of LPF of ADC results
+	Vc=V3_b0+V3_b1*V3f[0];
+	Vg=V4_b0+V4_b1*V4f[0];
+	Vdc=V2_b0+V2_b1*V2f[0];
+	VDCLK=V1_b0+V1_b1*V1f[0];
+	Iac=-I2_b0-I2_b1*I2f[0];
+	//Iac=I2f[0];
+	Idc=I1_b0+I1_b1*I1f[0];
+
+
+	VDCLK_f.In=400+15*sin(2*W*i);
+	NOTCH_FLTR_F_run(&VDCLK_f,&NF_f2);
+	//m_ac=391*sin(W*i);
+	SPLL_Vg.u[0]=(float32) Vg/50;
+	SPLL_1ph_SOGI_F_MACRO(SPLL_Vg);
+
+	//Iac_err[0]=Iac_pref*sin(SPLL_Vc.theta[0])-Iac;
+	if(Iac_ref<Iac_pref)
+	{
+		Iac_ref=Iac_ref+0.00003;
+	}
+	else if(Iac_ref>Iac_pref)
+		Iac_ref=Iac_pref;
+
+
+	/*if(strt==1)
+	{
+	Iac_err[0]=Iac_ref*sin(SPLL_Vg.theta[0])-Iac;
+	Iac_PR[0]=PR_b0*Iac_err[0]+PR_b1*Iac_err[1]+PR_b2*Iac_err[2]-PR_a1*Iac_PR[1]-PR_a2*Iac_PR[2];
+	Iac_err[2]=Iac_err[1];
+	Iac_err[1]=Iac_err[0];
+	Iac_PR[2]=Iac_PR[1];
+	Iac_PR[1]=Iac_PR[0];
+	//m_ac=Iac_PR[0]/VDC;
+
+	//m_ac=.8*sin(W*i);
+	if(m_ac>0.9)
+		m_ac=0.9;
+	else if(m_ac<-.9)
+		m_ac=-.9;
+	}*/
+
+	if(DB==1)
+	{
+		x_DB[i]=Vc;
+	}
+	else if(DB==2)
+	{
+		x_DB[i]=Vg;
+	}
+	else if(DB==3)
+	{
+		x_DB[i]=Vg-Vc;
+	}
+	else if(DB==4)
+	{
+		x_DB[i]=Iac;
+	}
+	else if(DB==5)
+	{
+		x_DB[i]=VDCLK;
+	}
+	else if(DB==6)
+	{
+		x_DB[i]=m_ac;
+	}
+	else if(DB==7)
+	{
+		x_DB[i]=I2s[0];
+	}
+	else if(DB==8)
+	{
+		x_DB[i]=SPLL_Vg.theta[0];
+	}
+	else if(DB==9)
+	{
+		x_DB[i]=Vg+SPLL_Vg.u_D[0]*50*sin(SPLL_Vg.theta[0]);
+	}
+	else if(DB==10)
+	{
+		x_DB[i]=VDCLK_f.Out;
+	}
+	i++;
+	if(i==1249) i=0;
+	//m_ac=.8*sin(W*i);
+
+
+
+	/*		 End		*/
+	if(GrdSync==0 && GSynFlag==1 && fabs(SPLL_Vg.theta[0])<.01)
+	{
+		GpioDataRegs.GPCSET.bit.GPIO65 = 1;
+		GpioDataRegs.GPCSET.bit.GPIO69 = 1;
+		GrdSync=1;
+	}
+	if(GrdSync==1 && GSynFlag==0 && fabs(SPLL_Vg.theta[0])<.01)
+	{
+		GpioDataRegs.GPCCLEAR.bit.GPIO65 = 1;
+		GpioDataRegs.GPCCLEAR.bit.GPIO69 = 1;
+		GrdSync=0;
+	}
+	m_a=.9*sin(W*i);
+	m_b=.65*cos(W*i);
+	// SCI_C code section
+	/*if((i%8)==0)
+	{
+		scic_xmit(255);
+		x=(int) ((m_a+1)*127.5);
+		scic_xmit(x);
+		x=(int) ((m_b+1)*127.5);
+		scic_xmit(x);
+	}*/
+	// End-SCI_C code section
+
+	m_ac=.9*sin(W*i);
+	if(strt)
+	{
+		EPwm2Regs.CMPA.bit.CMPA= (int) Period*(.5+m_ac/2);
+		EPwm6Regs.CMPA.bit.CMPA= (int) Period*(.5+m_ac/2);
+	}
+	else
+	{
+		EPwm2Regs.CMPA.bit.CMPA= 0;
+		EPwm6Regs.CMPA.bit.CMPA= 0;
+	}
+	if(Iac_pref!=Iac_pref_old)
+		GpioDataRegs.GPCSET.bit.GPIO71 = 1;
+	Iac_pref_old=Iac_pref;
+	//EPwm2Regs.CMPA.bit.CMPA = ma;
+	//EPwm6Regs.CMPA.bit.CMPA = mb;
+	//EPwm10Regs.CMPA.bit.CMPA = mc;
+	//acknowledge the adc flag
+	AdcaRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
+	AdcbRegs.ADCINTFLGCLR.bit.ADCINT1 = 1;
+
+    // Clear INT flag for this timer
+    EPwm1Regs.ETCLR.bit.INT = 1;
+
+    // Acknowledge this interrupt to receive more interrupts from group 3
+    PieCtrlRegs.PIEACK.all = PIEACK_GROUP3;
+}
+
+
+
+
+
+
+
+
