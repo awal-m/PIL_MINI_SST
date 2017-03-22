@@ -13,6 +13,7 @@
 
 // PIL includes
 #include "pil.h"
+#include "pil_ctrl.h"
 #include "pil_sci.h"
 
 #endif // PIL_INCLUDES_H_

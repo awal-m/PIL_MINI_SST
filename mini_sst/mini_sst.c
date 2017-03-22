@@ -173,6 +173,13 @@ void main(void)
 	SCIInit(ONE_STOPBIT+ NO_PARITY + EIGHT_BITS, BAUD_RATE, LSPCLK_HZ);
 	SCIWriteString("\n\rSerial link initialized.\n\r");
 
+	// initialize PIL framework
+	PIL_init();
+	PIL_setLinkParams((unsigned char*)&PIL_D_Guid[0], (PIL_CommCallbackPtr_t)SCIPoll);
+	PIL_setCtrlCallback((PIL_CtrlCallbackPtr_t)PilCallback);
+
+	PilInitOverrideProbes();
+
 	IER |= M_INT3;
 	PieCtrlRegs.PIEIER3.bit.INTx2 = 1;
     EINT;  // Enable Global interrupt INTM
@@ -181,11 +188,14 @@ void main(void)
     for(;;)
     {
         BlinkLED();
+		PIL_backgroundCall();
     }
 }
 
 __interrupt void epwm2_isr(void)
 {
+	PIL_beginInterruptCall();
+
     //start conversions immediately via software, ADCA and ADCB
 	AdcaRegs.ADCSOCFRC1.all = 0x0003;   //SOC0, SOC1
 	AdcbRegs.ADCSOCFRC1.all = 0x000F;   //SOC0, SOC1, SOC2, SOC3
