@@ -22,4 +22,12 @@
 
 extern void PilCallback(PIL_CtrlCallbackReq_t action);
 
+typedef struct GLOBAL_VARS {
+	PIL_READ_PROBE(uint16_t, stepCtr, 0, 1.0, "");
+	PIL_READ_PROBE(float, outF, 0, 1.0, "");
+	PIL_OVERRIDE_PROBE(float, inF, 0, 1.0, "");
+} GlobalVars_t;
+
+extern GlobalVars_t GVars;
+
 #endif

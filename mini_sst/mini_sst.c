@@ -42,6 +42,8 @@
 
 #include "pil_includes.h"
 
+GlobalVars_t GVars;
+
 #pragma CODE_SECTION(epwm2_isr, "ramfuncs");// Copy the code from flash to RAM
 
 
@@ -196,6 +198,8 @@ __interrupt void epwm2_isr(void)
 {
 	PIL_beginInterruptCall();
 
+	GVars.stepCtr++;
+
     //start conversions immediately via software, ADCA and ADCB
 	AdcaRegs.ADCSOCFRC1.all = 0x0003;   //SOC0, SOC1
 	AdcbRegs.ADCSOCFRC1.all = 0x000F;   //SOC0, SOC1, SOC2, SOC3
@@ -210,6 +214,9 @@ __interrupt void epwm2_isr(void)
 	I1s[0]=AdcbResultRegs.ADCRESULT2;
 	I2s[0]=AdcbResultRegs.ADCRESULT3;
 	//End of ADC reading
+
+	SET_OPROBE(GVars.inF, 1.0);
+	GVars.outF = 2.0 * GVars.inF;
 
 	if (control_c==1)
 	{

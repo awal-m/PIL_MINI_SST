@@ -41,11 +41,29 @@ void PilCallback(PIL_CtrlCallbackReq_t aCallbackReq)
 		     break;
 
 		case PIL_CLBK_STOP_TIMERS:
-			// stop relevant timers
+			EALLOW;
+			CpuSysRegs.PCLKCR2.bit.EPWM1 = 0; // ePWM1
+			CpuSysRegs.PCLKCR2.bit.EPWM2 = 0; // ePWM2
+			CpuSysRegs.PCLKCR2.bit.EPWM3 = 0; // ePWM3
+			CpuSysRegs.PCLKCR2.bit.EPWM4 = 0; // ePWM4
+			CpuSysRegs.PCLKCR2.bit.EPWM5 = 0; // ePWM5
+			CpuSysRegs.PCLKCR2.bit.EPWM6 = 0; // ePWM6
+			CpuSysRegs.PCLKCR2.bit.EPWM7 = 0; // ePWM7
+			CpuSysRegs.PCLKCR2.bit.EPWM8 = 0; // ePWM8
+			EDIS;
 			return;
 
 		case PIL_CLBK_START_TIMERS:
-			// start relevant timers
+			EALLOW;
+			CpuSysRegs.PCLKCR2.bit.EPWM1 = 1; // ePWM1
+			CpuSysRegs.PCLKCR2.bit.EPWM2 = 1; // ePWM2
+			CpuSysRegs.PCLKCR2.bit.EPWM3 = 1; // ePWM3
+			CpuSysRegs.PCLKCR2.bit.EPWM4 = 1; // ePWM4
+			CpuSysRegs.PCLKCR2.bit.EPWM5 = 1; // ePWM5
+			CpuSysRegs.PCLKCR2.bit.EPWM6 = 1; // ePWM6
+			CpuSysRegs.PCLKCR2.bit.EPWM7 = 1; // ePWM7
+			CpuSysRegs.PCLKCR2.bit.EPWM8 = 1; // ePWM8
+			EDIS;
 			return;
    }
 }
