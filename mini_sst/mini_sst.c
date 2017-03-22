@@ -39,6 +39,9 @@
 #include "Mini_SST.h"
 #include "Solar_F.h"
 #include "Control.h"
+
+#include "pil_includes.h"
+
 #pragma CODE_SECTION(epwm2_isr, "ramfuncs");// Copy the code from flash to RAM
 
 
@@ -165,6 +168,10 @@ void main(void)
 
 	ConfigureADC();
 	SetupADCSoftware();
+
+	// configure serial line
+	SCIInit(ONE_STOPBIT+ NO_PARITY + EIGHT_BITS, BAUD_RATE, LSPCLK_HZ);
+	SCIWriteString("\n\rSerial link initialized.\n\r");
 
 	IER |= M_INT3;
 	PieCtrlRegs.PIEIER3.bit.INTx2 = 1;
